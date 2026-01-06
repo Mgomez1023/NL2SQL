@@ -1,7 +1,15 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from app.db import ensure_sample_loaded, get_conn, TABLE_NAME
+from app.db import (
+    ensure_sample_loaded,
+    get_conn,
+    TABLE_NAME,
+    ACTIVE_CSV,
+    get_active_schema,
+    load_csv_as_active,
+    load_demo_as_active,
+)
 from app.llm import generate_sql, repair_sql
 from uuid import uuid4
 from datetime import datetime, timezone
@@ -54,28 +62,21 @@ def startup():
 #SCHEMA - DB CONNECTION
 @app.get("/schema")
 def schema():
-    con = get_conn()
-    try:
-        #DESCRIBE returns: column_name, column_type, null, key, default, extra(varies)
-        rows = con.execute(f"DESCRIBE {TABLE_NAME}").fetchall()
-    finally:
-        con.close()
-    
-    #Normalize into a clean JSON structure
-    columns = []
-    for r in rows:
-        #DuckDB typically has column_name, column_type, null, key, default
-        columns.append(
-            {
-                "name": r[0],
-                "type": r[1],
-            }
-        )
+    return get_active_schema()
 
-        return {
-            "table": TABLE_NAME,
-            "columns": columns
-        }
+@app.post("/dataset/use-demo")
+def use_demo():
+    meta = load_demo_as_active()
+    return {"ok": True, "mode": "demo", **meta}
+
+@app.post("/dataset/upload")
+async def upload_dataset(file: UploadFile = File(...)):
+    ACTIVE_CSV.parent.mkdir(parents=True, exist_ok=True)
+    content = await file.read()
+    ACTIVE_CSV.write_bytes(content)
+
+    meta = load_csv_as_active(ACTIVE_CSV, source="upload", filename=file.filename or ACTIVE_CSV.name)
+    return {"ok": True, "mode": "upload", **meta}
 
 #SQL PREVIEW
 @app.get("/preview")

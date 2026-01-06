@@ -12,7 +12,7 @@ Return format:
 - Keys: sql (string), assumptions (string or list), confidence (number 0-1).
 Rules:
 - SQL must be a single SELECT statement.
-- Query ONLY the table ds_main.
+- Query ONLY the table ds_active.
 - Always include a LIMIT.
 - Use only columns that exist in the schema.
 """
@@ -22,7 +22,7 @@ REPAIR_SYSTEM_PROMPT = """You repair DuckDB SQL.
 Return ONLY valid JSON with keys: sql, confidence.
 Rules:
 - Single SELECT statement.
-- Query ONLY the table ds_main.
+- Query ONLY the table ds_active.
 - Always include a LIMIT.
 - Use only columns that exist in the schema.
 """

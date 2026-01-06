@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useRef } from "react";
+import { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import { format } from "sql-formatter";
 
 type QueryOk = {
@@ -21,9 +21,26 @@ type QueryErr = {
 
 type QueryResponse = QueryOk | QueryErr;
 
-type ActiveDialog = "none" | "schema" | "about";
+type SchemaColumn = {
+  name: string;
+  type: string;
+};
+
+type SchemaResponse = {
+  table: string;
+  row_count: number;
+  source: string;
+  filename: string;
+  columns: SchemaColumn[];
+};
+
+type ActiveDialog = "none" | "schema" | "about" | "upload";
 
 const API_BASE = "http://127.0.0.1:8000";
+
+function clamp(n: number, min: number, max: number) {
+  return Math.min(Math.max(n, min), max);
+}
 
 function formatSQL(sql: string) {
   try {
@@ -44,8 +61,23 @@ export default function App() {
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [dialog, setDialog] = useState<ActiveDialog>("none");
+  const [schemaData, setSchemaData] = useState<SchemaResponse | null>(null);
+  const [schemaError, setSchemaError] = useState<string | null>(null);
+  const [datasetMenuOpen, setDatasetMenuOpen] = useState(false);
+  const [datasetBusy, setDatasetBusy] = useState(false);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const datasetMenuRef = useRef<HTMLDivElement | null>(null);
 
 //DRAGGING FUNCTION
+  const [mainPos, setMainPos] = useState<{ x: number; y: number } | null>(null);
+  const mainDragRef = useRef<{
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+    dragging: boolean;
+  }>({ startX: 0, startY: 0, originX: 0, originY: 0, dragging: false });
+
   const [aboutPos, setAboutPos] = useState<{ x: number; y: number } | null>(null);
   const dragRef = useRef<{
     startX: number;
@@ -54,6 +86,64 @@ export default function App() {
     originY: number;
     dragging: boolean;
   }>({ startX: 0, startY: 0, originX: 0, originY: 0, dragging: false });
+
+  useEffect(() => {
+    if (mainPos === null) {
+      const w = 700;
+      const h = 620;
+      const x = Math.max(16, Math.round(window.innerWidth / 2 - w / 2));
+      const y = Math.max(16, Math.round(window.innerHeight / 2 - h / 2));
+      setMainPos({ x, y });
+    }
+  }, [mainPos]);
+
+  function onMainTitlePointerDown(e: React.PointerEvent) {
+    if (e.button !== 0) return;
+
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+
+    const pos = mainPos ?? { x: 0, y: 0 };
+
+    mainDragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      originX: pos.x,
+      originY: pos.y,
+      dragging: true,
+    };
+  }
+
+  const onMainPointerMove = useCallback((e: PointerEvent) => {
+    if (!mainDragRef.current.dragging) return;
+
+    const dx = e.clientX - mainDragRef.current.startX;
+    const dy = e.clientY - mainDragRef.current.startY;
+
+    const margin = 8;
+    const approxW = 740;
+    const approxH = 700;
+
+    const x = clamp(mainDragRef.current.originX + dx, margin, window.innerWidth - approxW - margin);
+    const y = clamp(mainDragRef.current.originY + dy, margin, window.innerHeight - approxH - margin);
+
+    setMainPos({ x, y });
+  }, []);
+
+  function stopMainDragging() {
+    mainDragRef.current.dragging = false;
+  }
+
+  useEffect(() => {
+    window.addEventListener("pointermove", onMainPointerMove);
+    window.addEventListener("pointerup", stopMainDragging);
+    window.addEventListener("pointercancel", stopMainDragging);
+
+    return () => {
+      window.removeEventListener("pointermove", onMainPointerMove);
+      window.removeEventListener("pointerup", stopMainDragging);
+      window.removeEventListener("pointercancel", stopMainDragging);
+    };
+  }, [onMainPointerMove]);
 
   // Set initial position (center) when opening
   useEffect(() => {
@@ -68,10 +158,6 @@ export default function App() {
       setAboutPos(null); // reset so it centers next open
     }
   }, [dialog, aboutPos]);
-
-  function clamp(n: number, min: number, max: number) {
-    return Math.min(Math.max(n, min), max);
-  }
 
   function onAboutTitlePointerDown(e: React.PointerEvent) {
     // only left-click / primary touch
@@ -99,7 +185,7 @@ export default function App() {
 
     // Optional: keep window inside viewport with a small margin
     const margin = 8;
-    const approxW = 520; // keep conservative if you don’t measure
+    const approxW = 520; // keep conservative if you do not measure
     const approxH = 260;
 
     const x = clamp(dragRef.current.originX + dx, margin, window.innerWidth - approxW - margin);
@@ -126,6 +212,94 @@ export default function App() {
       window.removeEventListener("pointercancel", stopDragging);
     };
   }, [dialog, aboutPos]);
+
+  useEffect(() => {
+    if (!datasetMenuOpen) return;
+
+    function onPointerDown(e: PointerEvent) {
+      const target = e.target as Node;
+      if (datasetMenuRef.current && !datasetMenuRef.current.contains(target)) {
+        setDatasetMenuOpen(false);
+      }
+    }
+
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => window.removeEventListener("pointerdown", onPointerDown);
+  }, [datasetMenuOpen]);
+
+  useEffect(() => {
+    refreshSchema();
+  }, []);
+
+  async function refreshSchema() {
+    setSchemaError(null);
+    try {
+      const r = await fetch(`${API_BASE}/schema`);
+      const data = (await r.json().catch(() => ({}))) as any;
+      if (!r.ok) {
+        setSchemaError(data?.detail ?? `HTTP ${r.status}`);
+        return;
+      }
+      setSchemaData(data as SchemaResponse);
+    } catch (e: any) {
+      setSchemaError(e?.message ?? "Network error");
+    }
+  }
+
+  async function openSchemaDialog() {
+    setDialog("schema");
+    await refreshSchema();
+  }
+
+  async function useDemoDataset() {
+    setDatasetBusy(true);
+    setSchemaError(null);
+    setNetworkError(null);
+    setDatasetMenuOpen(false);
+    try {
+      const r = await fetch(`${API_BASE}/dataset/use-demo`, { method: "POST" });
+      const data = (await r.json().catch(() => ({}))) as any;
+      if (!r.ok) {
+        setSchemaError(data?.detail ?? `HTTP ${r.status}`);
+        return;
+      }
+      setSchemaData(data as SchemaResponse);
+      setResp(null);
+    } catch (e: any) {
+      setSchemaError(e?.message ?? "Network error");
+    } finally {
+      setDatasetBusy(false);
+    }
+  }
+
+  async function uploadDataset() {
+    if (!uploadFile) {
+      setSchemaError("Choose a CSV file first.");
+      return;
+    }
+
+    setDatasetBusy(true);
+    setSchemaError(null);
+    setNetworkError(null);
+    try {
+      const form = new FormData();
+      form.append("file", uploadFile);
+      const r = await fetch(`${API_BASE}/dataset/upload`, { method: "POST", body: form });
+      const data = (await r.json().catch(() => ({}))) as any;
+      if (!r.ok) {
+        setSchemaError(data?.detail ?? `HTTP ${r.status}`);
+        return;
+      }
+      setSchemaData(data as SchemaResponse);
+      setResp(null);
+      setDialog("none");
+      setUploadFile(null);
+    } catch (e: any) {
+      setSchemaError(e?.message ?? "Network error");
+    } finally {
+      setDatasetBusy(false);
+    }
+  }
 
 
   const hasTable = useMemo(() => {
@@ -213,11 +387,26 @@ async function copyToClipboard(text: string) {
   }
 }
 
+  const datasetLabel = useMemo(() => {
+    if (!schemaData) return "Dataset: Loading...";
+    const sourceLabel = schemaData.source === "upload" ? "Uploaded" : "Demo";
+    const filename = schemaData.filename || schemaData.table;
+    const rowCount = typeof schemaData.row_count === "number" ? `${schemaData.row_count} rows` : "rows unknown";
+    return `Dataset: ${sourceLabel} (${filename}, ${rowCount})`;
+  }, [schemaData]);
+
   return (
     <>
-    <div style={{ maxWidth: 700, margin: "0 auto" ,}}>
+    <div
+        className="main-window"
+        style={{
+          left: mainPos?.x ?? 0,
+          top: mainPos?.y ?? 0,
+          width: "min(700px, calc(100vw - 48px))",
+        }}
+      >
         <div className="window" style={{ width: "100%" }}>
-          <div className="title-bar">
+          <div className="title-bar draggable" onPointerDown={onMainTitlePointerDown}>
             <div className="title-bar-text">NL→SQL Explorer</div>
             <div className="title-bar-controls">
               <button aria-label="Minimize" />
@@ -226,23 +415,63 @@ async function copyToClipboard(text: string) {
             </div>
           </div>
 
-          <div className="menu-bar">
+          <div className="menu-bar win95-menu">
             <a href="#" onClick={(e) => { e.preventDefault(); setResp(null); setNetworkError(null); }}>
-              File
+              Reset
             </a>
-            <a href="#" onClick={(e) => { e.preventDefault(); setDialog("schema"); }}>
-              Dataset
-            </a>
+            <div className="menu-item" ref={datasetMenuRef}>
+              <a
+                href="#"
+                onClick={(e) => {
+                  e.preventDefault();
+                  setDatasetMenuOpen((open) => !open);
+                }}
+              >
+                Dataset
+              </a>
+              {datasetMenuOpen && (
+                <div className="menu-dropdown">
+                  <button type="button" disabled={datasetBusy} onClick={useDemoDataset}>
+                    Use Demo Dataset
+                  </button>
+                  <button
+                    type="button"
+                    disabled={datasetBusy}
+                    onClick={() => {
+                      setSchemaError(null);
+                      setUploadFile(null);
+                      setDialog("upload");
+                      setDatasetMenuOpen(false);
+                    }}
+                  >
+                    Upload CSV...
+                  </button>
+                  <button
+                    type="button"
+                    disabled={datasetBusy}
+                    onClick={() => {
+                      setDatasetMenuOpen(false);
+                      openSchemaDialog();
+                    }}
+                  >
+                    Schema
+                  </button>
+                </div>
+              )}
+            </div>
             <a href="#" onClick={(e) => { e.preventDefault(); setDialog("about"); }}>
               About
             </a>
           </div>
 
           <div className="window-body" style={{ padding: 12 }}>
-            <div style={{ maxWidth: 900, margin: "40px auto", padding: 16 }}>
+            <div style={{ maxWidth: 900, margin: "0px auto 40px auto", padding: 16 }}>
                   <h1 style={{ marginBottom: 6 }}>Natural Language→SQL Explorer</h1>
                   <div style={{ opacity: 0.8, marginBottom: 16 , textAlign: "center",}}>
                     Vite UI → FastAPI → OpenAI → DuckDB
+                  </div>
+                  <div style={{ fontSize: "12px", opacity: 0.85, marginBottom: 16, textAlign: "center" }}>
+                    {datasetLabel}
                   </div>
 
                   <div style={{ display: "flex", gap: 10, alignItems: "center", }}>
@@ -252,8 +481,9 @@ async function copyToClipboard(text: string) {
                       placeholder='e.g. "Show me the top 10 pitch types by average velocity"'
                       style={{
                         flex: 1,
-                        padding: 16,
-                        fontSize: "14px",
+                        padding: 14,
+                        fontSize: "18px",
+                        fontWeight: 500,
                         borderRadius: 10,
                         border: "1px solid #ccc",
                         backgroundColor: "white",
@@ -334,7 +564,7 @@ async function copyToClipboard(text: string) {
                         <div className="window-body">
                           <p style={{ marginTop: 0 }}>{resp.error?.message ?? resp.detail ?? "Unknown error"}</p>
                           {resp.query_id && resp.retryable && (
-                            <button onClick={() => retry(resp.query_id)} disabled={loading}>
+                            <button style={{color: "white"}}onClick={() => retry(resp.query_id)} disabled={loading}>
                               {loading ? "Retrying..." : "Retry"}
                             </button>
                           )}
@@ -452,6 +682,87 @@ async function copyToClipboard(text: string) {
         </div>
       </div>
 
+      {dialog === "schema" && (
+        <div className="modal-overlay" onClick={() => setDialog("none")}>
+          <div className="window modal-window" onClick={(e) => e.stopPropagation()}>
+            <div className="title-bar">
+              <div className="title-bar-text">Schema</div>
+              <div className="title-bar-controls">
+                <button aria-label="Close" onClick={() => setDialog("none")} />
+              </div>
+            </div>
+            <div className="window-body">
+              {schemaError && (
+                <div style={{ color: "crimson", marginBottom: 8 }}>
+                  <b>Error:</b> {schemaError}
+                </div>
+              )}
+              {!schemaError && schemaData && (
+                <>
+                  <div><b>Table:</b> {schemaData.table}</div>
+                  <div><b>Source:</b> {schemaData.source}</div>
+                  <div><b>File:</b> {schemaData.filename}</div>
+                  <div><b>Rows:</b> {schemaData.row_count}</div>
+                  <div style={{ marginTop: 10, fontWeight: 700 }}>Columns</div>
+                  <ul style={{ margin: "6px 0 0 18px" }}>
+                    {schemaData.columns.map((col) => (
+                      <li key={col.name}>
+                        {col.name} ({col.type})
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              {!schemaError && !schemaData && (
+                <div>No schema loaded.</div>
+              )}
+              <div style={{ textAlign: "right", marginTop: 12 }}>
+                <button style={{ color: "white" }} onClick={() => setDialog("none")}>
+                  OK
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {dialog === "upload" && (
+        <div className="modal-overlay" onClick={() => setDialog("none")}>
+          <div className="window modal-window" onClick={(e) => e.stopPropagation()}>
+            <div className="title-bar">
+              <div className="title-bar-text">Upload CSV</div>
+              <div className="title-bar-controls">
+                <button aria-label="Close" onClick={() => setDialog("none")} />
+              </div>
+            </div>
+            <div className="window-body">
+              {schemaError && (
+                <div style={{ color: "crimson", marginBottom: 8 }}>
+                  <b>Error:</b> {schemaError}
+                </div>
+              )}
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)}
+              />
+              <div style={{ textAlign: "right", marginTop: 12 }}>
+                <button
+                  onClick={uploadDataset}
+                  disabled={datasetBusy || !uploadFile}
+                  style={{ color: "white", marginRight: 8 }}
+                >
+                  {datasetBusy ? "Uploading..." : "Upload"}
+                </button>
+                <button onClick={() => setDialog("none")} style={{ color: "white" }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {dialog === "about" && aboutPos && (
         <div
           className="modal-overlay"
@@ -478,7 +789,7 @@ async function copyToClipboard(text: string) {
               </p>
               <p>Natural language → safe SQL → DuckDB execution with AI-assisted retry.</p>
               <div style={{ textAlign: "right", marginTop: 12 }}>
-                <button style={{color: "white"}}onClick={() => setDialog("none")}>OK</button>
+                <button style={{color: "white", background: "#555555ff",}}onClick={() => setDialog("none")}>OK</button>
               </div>
             </div>
           </div>
