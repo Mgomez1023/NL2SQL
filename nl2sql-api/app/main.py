@@ -68,10 +68,10 @@ def echo(req:  EchoRequest):
 #STARTUP
 @app.on_event("startup")
 def startup():
-    """
-    Ensures that the sample data is loaded into the database on startup.
-    """
-    ensure_sample_loaded()
+    try:
+        ensure_sample_loaded()
+    except Exception as e:
+        print(f"[startup] skipped sample load: {e}")
 
 #SCHEMA - DB CONNECTION
 @app.get("/schema")

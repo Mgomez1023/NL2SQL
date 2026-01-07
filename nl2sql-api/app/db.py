@@ -3,19 +3,42 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-DB_PATH = Path("data/app.duckdb")
+from pathlib import Path
+import os
+import duckdb
+
+# Base directory of the backend project (nl2sql-api/)
+BASE_DIR = Path(__file__).resolve().parents[1]
+
+# Detect serverless (Vercel/Lambda)
+IS_SERVERLESS = (
+    os.environ.get("VERCEL") == "1"
+    or os.environ.get("AWS_LAMBDA_FUNCTION_NAME") is not None
+)
+
+# Writable runtime directory:
+# - Local dev: nl2sql-api/data
+# - Vercel: /tmp
+RUNTIME_DIR = Path("/tmp") if IS_SERVERLESS else (BASE_DIR / "data")
+RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+
+# Read-only bundled demo CSV (must be committed in repo)
+SAMPLE_CSV = BASE_DIR / "data" / "savant_data.csv"
+
+# Writable paths (must NOT be under the repo on Vercel)
+DB_PATH = RUNTIME_DIR / "app.duckdb"
+ACTIVE_CSV = RUNTIME_DIR / "active.csv"
+ACTIVE_META = RUNTIME_DIR / "active_meta.json"
+
 TABLE_NAME = "ds_active"
-SAMPLE_CSV = Path("data/savant_data.csv")
-ACTIVE_CSV = Path("data/uploads/active.csv")
-ACTIVE_META = Path("data/uploads/active_meta.json")
 
 def get_conn() -> duckdb.DuckDBPyConnection:
     """
     Opens (or creates) the DuckDB database file.
-    DuckDB is embedded, so this is just a file on disk.
+    Serverless note: On Vercel, only /tmp is writable.
     """
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     return duckdb.connect(str(DB_PATH))
+
 
 def _write_active_metadata(source: str, filename: str) -> None:
     ACTIVE_META.parent.mkdir(parents=True, exist_ok=True)
