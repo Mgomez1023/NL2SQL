@@ -36,7 +36,12 @@ type SchemaResponse = {
 
 type ActiveDialog = "none" | "schema" | "about" | "upload";
 
-const API_BASE = "http://127.0.0.1:8000";
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+
+type ExamplePrompt = {
+  label: string;
+  prompt: string;
+};
 
 function clamp(n: number, min: number, max: number) {
   return Math.min(Math.max(n, min), max);
@@ -54,6 +59,72 @@ function formatSQL(sql: string) {
   }
 }
 
+function buildExamplePrompts(schema: SchemaResponse | null): ExamplePrompt[] {
+  const genericBase = [
+    "Show me 10 rows",
+    "How many rows are in this dataset?",
+    "List the columns available",
+  ];
+
+  if (!schema || !schema.columns || schema.columns.length === 0) {
+    return genericBase.map((prompt) => ({ label: prompt, prompt }));
+  }
+
+  const cols = schema.columns.map((col) => ({
+    name: col.name,
+    lower: col.name.toLowerCase(),
+    type: col.type.toLowerCase(),
+  }));
+
+  const hasPlayerName = cols.some((c) => c.lower === "player_name");
+  const hasPitches = cols.some((c) => c.lower === "pitches");
+
+  if (hasPlayerName && hasPitches) {
+    const baseball = [
+      "Top 10 pitchers by pitches thrown",
+      "Average velocity by player_name (top 10 by pitches)",
+      "Highest whiff rate (whiffs / swings) among pitchers with swings > 2000",
+      "Compare wOBA vs xwOBA for the top 10 by pitches",
+      "Show pitchers with the largest difference between BA and xBA",
+      "Average launch_angle against each player_name (top 10 by pitches)",
+    ];
+    return baseball.map((prompt) => ({ label: prompt, prompt }));
+  }
+
+  const numericTypes = ["double", "float", "real", "integer", "bigint", "decimal"];
+  const categoricalTypes = ["varchar", "text", "string"];
+
+  const numericCols = cols.filter((c) => numericTypes.some((t) => c.type.includes(t)));
+  const categoricalCols = cols.filter((c) => categoricalTypes.some((t) => c.type.includes(t)));
+
+  const isIdLike = (name: string) => name.includes("id") || name.includes("uuid") || name.includes("key");
+  const bestNumeric =
+    numericCols.find((c) => !isIdLike(c.lower))?.name ?? numericCols[0]?.name ?? null;
+
+  const preferredCat = ["name", "type", "category", "team"];
+  const bestCategorical =
+    categoricalCols.find((c) => preferredCat.some((hint) => c.lower.includes(hint)))?.name ??
+    categoricalCols[0]?.name ??
+    null;
+
+  const prompts: ExamplePrompt[] = [];
+  for (const prompt of genericBase) {
+    prompts.push({ label: prompt, prompt });
+  }
+
+  if (bestNumeric) {
+    const prompt = `Top 10 rows by ${bestNumeric}`;
+    prompts.push({ label: prompt, prompt });
+  }
+
+  if (bestNumeric && bestCategorical) {
+    const prompt = `Average ${bestNumeric} by ${bestCategorical}`;
+    prompts.push({ label: prompt, prompt });
+  }
+
+  return prompts;
+}
+
 export default function App() {
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
@@ -67,6 +138,7 @@ export default function App() {
   const [datasetBusy, setDatasetBusy] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const datasetMenuRef = useRef<HTMLDivElement | null>(null);
+  const questionInputRef = useRef<HTMLInputElement | null>(null);
 
 //DRAGGING FUNCTION
   const [mainPos, setMainPos] = useState<{ x: number; y: number } | null>(null);
@@ -80,6 +152,24 @@ export default function App() {
 
   const [aboutPos, setAboutPos] = useState<{ x: number; y: number } | null>(null);
   const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+    dragging: boolean;
+  }>({ startX: 0, startY: 0, originX: 0, originY: 0, dragging: false });
+
+  const [schemaPos, setSchemaPos] = useState<{ x: number; y: number } | null>(null);
+  const schemaDragRef = useRef<{
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+    dragging: boolean;
+  }>({ startX: 0, startY: 0, originX: 0, originY: 0, dragging: false });
+
+  const [uploadPos, setUploadPos] = useState<{ x: number; y: number } | null>(null);
+  const uploadDragRef = useRef<{
     startX: number;
     startY: number;
     originX: number;
@@ -154,10 +244,24 @@ export default function App() {
       const y = Math.max(16, Math.round(window.innerHeight / 2 - h / 2));
       setAboutPos({ x, y });
     }
-    if (dialog !== "about") {
-      setAboutPos(null); // reset so it centers next open
+    if (dialog === "schema" && schemaPos === null) {
+      const w = 520;
+      const h = 360;
+      const x = Math.max(16, Math.round(window.innerWidth / 2 - w / 2));
+      const y = Math.max(16, Math.round(window.innerHeight / 2 - h / 2));
+      setSchemaPos({ x, y });
     }
-  }, [dialog, aboutPos]);
+    if (dialog === "upload" && uploadPos === null) {
+      const w = 460;
+      const h = 240;
+      const x = Math.max(16, Math.round(window.innerWidth / 2 - w / 2));
+      const y = Math.max(16, Math.round(window.innerHeight / 2 - h / 2));
+      setUploadPos({ x, y });
+    }
+    if (dialog !== "about") setAboutPos(null); // reset so it centers next open
+    if (dialog !== "schema") setSchemaPos(null);
+    if (dialog !== "upload") setUploadPos(null);
+  }, [dialog, aboutPos, schemaPos, uploadPos]);
 
   function onAboutTitlePointerDown(e: React.PointerEvent) {
     // only left-click / primary touch
@@ -212,6 +316,102 @@ export default function App() {
       window.removeEventListener("pointercancel", stopDragging);
     };
   }, [dialog, aboutPos]);
+
+  function onSchemaTitlePointerDown(e: React.PointerEvent) {
+    if (e.button !== 0) return;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+
+    const pos = schemaPos ?? { x: 0, y: 0 };
+    schemaDragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      originX: pos.x,
+      originY: pos.y,
+      dragging: true,
+    };
+  }
+
+  function onSchemaPointerMove(e: PointerEvent) {
+    if (!schemaDragRef.current.dragging) return;
+
+    const dx = e.clientX - schemaDragRef.current.startX;
+    const dy = e.clientY - schemaDragRef.current.startY;
+
+    const margin = 8;
+    const approxW = 560;
+    const approxH = 420;
+
+    const x = clamp(schemaDragRef.current.originX + dx, margin, window.innerWidth - approxW - margin);
+    const y = clamp(schemaDragRef.current.originY + dy, margin, window.innerHeight - approxH - margin);
+
+    setSchemaPos({ x, y });
+  }
+
+  function stopSchemaDragging() {
+    schemaDragRef.current.dragging = false;
+  }
+
+  useEffect(() => {
+    if (dialog !== "schema") return;
+
+    window.addEventListener("pointermove", onSchemaPointerMove);
+    window.addEventListener("pointerup", stopSchemaDragging);
+    window.addEventListener("pointercancel", stopSchemaDragging);
+
+    return () => {
+      window.removeEventListener("pointermove", onSchemaPointerMove);
+      window.removeEventListener("pointerup", stopSchemaDragging);
+      window.removeEventListener("pointercancel", stopSchemaDragging);
+    };
+  }, [dialog, schemaPos]);
+
+  function onUploadTitlePointerDown(e: React.PointerEvent) {
+    if (e.button !== 0) return;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+
+    const pos = uploadPos ?? { x: 0, y: 0 };
+    uploadDragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      originX: pos.x,
+      originY: pos.y,
+      dragging: true,
+    };
+  }
+
+  function onUploadPointerMove(e: PointerEvent) {
+    if (!uploadDragRef.current.dragging) return;
+
+    const dx = e.clientX - uploadDragRef.current.startX;
+    const dy = e.clientY - uploadDragRef.current.startY;
+
+    const margin = 8;
+    const approxW = 520;
+    const approxH = 280;
+
+    const x = clamp(uploadDragRef.current.originX + dx, margin, window.innerWidth - approxW - margin);
+    const y = clamp(uploadDragRef.current.originY + dy, margin, window.innerHeight - approxH - margin);
+
+    setUploadPos({ x, y });
+  }
+
+  function stopUploadDragging() {
+    uploadDragRef.current.dragging = false;
+  }
+
+  useEffect(() => {
+    if (dialog !== "upload") return;
+
+    window.addEventListener("pointermove", onUploadPointerMove);
+    window.addEventListener("pointerup", stopUploadDragging);
+    window.addEventListener("pointercancel", stopUploadDragging);
+
+    return () => {
+      window.removeEventListener("pointermove", onUploadPointerMove);
+      window.removeEventListener("pointerup", stopUploadDragging);
+      window.removeEventListener("pointercancel", stopUploadDragging);
+    };
+  }, [dialog, uploadPos]);
 
   useEffect(() => {
     if (!datasetMenuOpen) return;
@@ -395,6 +595,10 @@ async function copyToClipboard(text: string) {
     return `Dataset: ${sourceLabel} (${filename}, ${rowCount})`;
   }, [schemaData]);
 
+  const examplePrompts = useMemo(() => {
+    return buildExamplePrompts(schemaData);
+  }, [schemaData]);
+
   return (
     <>
     <div
@@ -476,6 +680,7 @@ async function copyToClipboard(text: string) {
 
                   <div style={{ display: "flex", gap: 10, alignItems: "center", }}>
                     <input
+                      ref={questionInputRef}
                       value={question}
                       onChange={(e) => setQuestion(e.target.value)}
                       placeholder='e.g. "Show me the top 10 pitch types by average velocity"'
@@ -484,7 +689,7 @@ async function copyToClipboard(text: string) {
                         padding: 14,
                         fontSize: "18px",
                         fontWeight: 500,
-                        borderRadius: 10,
+                        borderRadius: 0,
                         border: "1px solid #ccc",
                         backgroundColor: "white",
                         color:"black",
@@ -509,6 +714,34 @@ async function copyToClipboard(text: string) {
                     >
                       {loading ? "Asking..." : "Ask"}
                     </button>
+                  </div>
+
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 6 }}>Examples:</div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {examplePrompts.map((ex) => (
+                        <button
+                          key={ex.prompt}
+                          type="button"
+                          disabled={loading}
+                          onClick={() => {
+                            setQuestion(ex.prompt);
+                            questionInputRef.current?.focus();
+                          }}
+                          style={{
+                            padding: "4px 10px",
+                            borderRadius: 0,
+                            border: "1px solid #333",
+                            background: "#d8d8d8",
+                            color: "black",
+                            fontSize: 12,
+                            cursor: loading ? "not-allowed" : "pointer",
+                          }}
+                        >
+                          {ex.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
                   {networkError && (
@@ -618,8 +851,17 @@ async function copyToClipboard(text: string) {
                       {hasTable ? (
                         <>
                           <div style={{ fontWeight: 700, marginTop: 14 }}>Results</div>
-                          <div style={{ overflowX: "auto", border: "1px solid #ddd", borderRadius: 10 }}>
-                            <table style={{ width: "100%", borderCollapse: "collapse", color: "black", border: "2px grey solid" }}>
+                          <div
+                            style={{
+                              width: 640,
+                              maxWidth: "100%",
+                              maxHeight: "30vh",
+                              overflow: "auto",
+                              border: "1px solid #ddd",
+                              borderRadius: 10,
+                            }}
+                          >
+                            <table style={{ width: "100%", borderCollapse: "collapse", color: "black", border: "2px grey solid",  borderTop: "2px solid dark-grey" }}>
                               <thead>
                                 <tr>
                                   {resp.columns.map((c) => (
@@ -645,10 +887,10 @@ async function copyToClipboard(text: string) {
                                         key={j}
                                         style={{
                                           padding: 10,
-                                          borderBottom: "1px solid #eee",
-                                          borderRight: "1px solid #ddd",
+                                          borderBottom: "1px solid #a8a8a8ff",
+                                          borderRight: "1px solid #a8a8a8ff",
                                           whiteSpace: "nowrap",
-                                          background: "#c4c4c4ff",
+                                          background: "#f7f7f7",
                                           color: "black",
                                         }}
                                       >
@@ -682,16 +924,20 @@ async function copyToClipboard(text: string) {
         </div>
       </div>
 
-      {dialog === "schema" && (
+      {dialog === "schema" && schemaPos && (
         <div className="modal-overlay" onClick={() => setDialog("none")}>
-          <div className="window modal-window" onClick={(e) => e.stopPropagation()}>
-            <div className="title-bar">
+          <div
+            className="window modal-window"
+            onClick={(e) => e.stopPropagation()}
+            style={{ left: schemaPos.x, top: schemaPos.y, width: 520 }}
+          >
+            <div className="title-bar draggable" onPointerDown={onSchemaTitlePointerDown}>
               <div className="title-bar-text">Schema</div>
               <div className="title-bar-controls">
                 <button aria-label="Close" onClick={() => setDialog("none")} />
               </div>
             </div>
-            <div className="window-body">
+            <div className="window-body" style={{ maxHeight: "40vh", overflowY: "auto" }}>
               {schemaError && (
                 <div style={{ color: "crimson", marginBottom: 8 }}>
                   <b>Error:</b> {schemaError}
@@ -717,7 +963,7 @@ async function copyToClipboard(text: string) {
                 <div>No schema loaded.</div>
               )}
               <div style={{ textAlign: "right", marginTop: 12 }}>
-                <button style={{ color: "white" }} onClick={() => setDialog("none")}>
+                <button style={{ color: "white", background: "#555555ff",}} onClick={() => setDialog("none")}>
                   OK
                 </button>
               </div>
@@ -726,10 +972,14 @@ async function copyToClipboard(text: string) {
         </div>
       )}
 
-      {dialog === "upload" && (
+      {dialog === "upload" && uploadPos && (
         <div className="modal-overlay" onClick={() => setDialog("none")}>
-          <div className="window modal-window" onClick={(e) => e.stopPropagation()}>
-            <div className="title-bar">
+          <div
+            className="window modal-window"
+            onClick={(e) => e.stopPropagation()}
+            style={{ left: uploadPos.x, top: uploadPos.y }}
+          >
+            <div className="title-bar draggable" onPointerDown={onUploadTitlePointerDown}>
               <div className="title-bar-text">Upload CSV</div>
               <div className="title-bar-controls">
                 <button aria-label="Close" onClick={() => setDialog("none")} />
@@ -750,11 +1000,11 @@ async function copyToClipboard(text: string) {
                 <button
                   onClick={uploadDataset}
                   disabled={datasetBusy || !uploadFile}
-                  style={{ color: "white", marginRight: 8 }}
+                  style={{ color: "white", marginRight: 8, background: "#555555ff", }}
                 >
                   {datasetBusy ? "Uploading..." : "Upload"}
                 </button>
-                <button onClick={() => setDialog("none")} style={{ color: "white" }}>
+                <button onClick={() => setDialog("none")} style={{ color: "white", background: "#555555ff",  }}>
                   Cancel
                 </button>
               </div>
@@ -784,10 +1034,16 @@ async function copyToClipboard(text: string) {
             </div>
 
             <div className="window-body">
-              <p style={{ marginTop: 0 }}>
+              <p style={{ marginTop: 0, fontSize: "14px" }}>
                 <b>NL→SQL Explorer</b>
               </p>
-              <p>Natural language → safe SQL → DuckDB execution with AI-assisted retry.</p>
+              <p style={{marginLeft: "10px", fontSize: "14px" }}>NL2SQL explorer is a program written to turn natural language into 
+                usable SQL queries that can be executed to return results.
+              </p>
+
+              <b style={{fontSize: "14px"}}>Data Flow:</b>
+
+              <p style={{marginLeft: "10px", fontSize: "14px" }}>Natural language → OpenAI → safe SQL → DuckDB execution with AI-assisted retry.</p>
               <div style={{ textAlign: "right", marginTop: 12 }}>
                 <button style={{color: "white", background: "#555555ff",}}onClick={() => setDialog("none")}>OK</button>
               </div>

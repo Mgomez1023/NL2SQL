@@ -15,17 +15,31 @@ from uuid import uuid4
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 import re
+import os
 
 DEFAULT_LIMIT = 100
 app = FastAPI(title="NL2SQL API", version="0.1.0")
 QUERY_STORE: Dict[str, Dict[str, Any]] = {}
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
+def get_cors_origins() -> list[str]:
+    local_origins = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
-    ],
+    ]
+    ui_origin = os.environ.get("UI_ORIGIN")
+    env = os.environ.get("ENV", "development").lower()
+
+    if env == "development" and not ui_origin:
+        return local_origins
+
+    origins = list(local_origins)
+    if ui_origin:
+        origins.append(ui_origin)
+    return origins
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -113,7 +127,7 @@ def run_sql(req: SQLRequest):
         try:
             #execute once to get column names
             try:
-                cur = con.execute(req.sql)
+                cur = con.execute(sql)
             except Exception as e:
                 raise HTTPException(status_code=400, detail=f"SQL error: {e}")
             

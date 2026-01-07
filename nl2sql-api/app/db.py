@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 
 DB_PATH = Path("data/app.duckdb")
 TABLE_NAME = "ds_active"
-SAMPLE_CSV = Path("data/sample.csv")
+SAMPLE_CSV = Path("data/savant_data.csv")
 ACTIVE_CSV = Path("data/uploads/active.csv")
 ACTIVE_META = Path("data/uploads/active_meta.json")
 
