@@ -2,6 +2,8 @@ import { useMemo, useState, useEffect, useRef, useCallback } from "react";
 import { format } from "sql-formatter";
 
 type QueryOk = {
+    query_id: string;
+
   ok: true;
   question: string;
   sql: string;
@@ -12,6 +14,7 @@ type QueryOk = {
 
 type QueryErr = {
   ok: false;
+  query_id?: string;
   question?: string;
   sql?: string;
   error?: { type?: string; message: string };
@@ -797,7 +800,7 @@ async function copyToClipboard(text: string) {
                         <div className="window-body">
                           <p style={{ marginTop: 0 }}>{resp.error?.message ?? resp.detail ?? "Unknown error"}</p>
                           {resp.query_id && resp.retryable && (
-                            <button style={{color: "white"}}onClick={() => retry(resp.query_id)} disabled={loading}>
+                            <button style={{color: "white"}}onClick={() => retry(resp.query_id!)} disabled={loading}>
                               {loading ? "Retrying..." : "Retry"}
                             </button>
                           )}
