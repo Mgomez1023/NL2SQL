@@ -16,10 +16,25 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 import re
 import os
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 
 DEFAULT_LIMIT = 100
 app = FastAPI(title="NL2SQL API", version="0.1.0")
 QUERY_STORE: Dict[str, Dict[str, Any]] = {}
+
+
+class StripApiPrefixMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        path = request.scope.get("path", "")
+        if path == "/api":
+            request.scope["path"] = "/"
+        elif path.startswith("/api/"):
+            request.scope["path"] = path[len("/api"):]  # turns /api/health -> /health
+        return await call_next(request)
+
+app.add_middleware(StripApiPrefixMiddleware)
+
 
 def get_cors_origins() -> list[str]:
     local_origins = [
