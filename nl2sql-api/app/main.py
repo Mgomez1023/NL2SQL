@@ -42,11 +42,7 @@ def get_cors_origins() -> list[str]:
         "http://127.0.0.1:5173",
     ]
     ui_origin = os.environ.get("UI_ORIGIN")
-    env = os.environ.get("ENV", "development").lower()
-
-    if env == "development" and not ui_origin:
-        return local_origins
-
+    
     origins = list(local_origins)
     if ui_origin:
         origins.append(ui_origin)
