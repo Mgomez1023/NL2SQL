@@ -191,14 +191,16 @@ button:focus-visible {
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.25);
+  background: transparent;
   z-index: 9999;
+  pointer-events: none;
 }
 
 .modal-window {
   position: fixed;   /* IMPORTANT for dragging */
   min-width: 320px;
   max-width: 520px;
+  pointer-events: auto;
 }
 
 .title-bar.draggable {

@@ -37,7 +37,11 @@ type SchemaResponse = {
   columns: SchemaColumn[];
 };
 
-type ActiveDialog = "none" | "schema" | "about" | "upload";
+type DialogState = {
+  schema: boolean;
+  about: boolean;
+  upload: boolean;
+};
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
@@ -134,7 +138,11 @@ export default function App() {
   const [resp, setResp] = useState<QueryResponse | null>(null);
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [dialog, setDialog] = useState<ActiveDialog>("none");
+  const [dialog, setDialog] = useState<DialogState>({
+    schema: false,
+    about: false,
+    upload: false,
+  });
   const [schemaData, setSchemaData] = useState<SchemaResponse | null>(null);
   const [schemaError, setSchemaError] = useState<string | null>(null);
   const [datasetMenuOpen, setDatasetMenuOpen] = useState(false);
@@ -240,31 +248,40 @@ export default function App() {
 
   // Set initial position (center) when opening
   useEffect(() => {
-    if (dialog === "about" && aboutPos === null) {
+    if (dialog.about && aboutPos === null) {
       const w = 420; // approximate width; window will still render fine
       const h = 220; // approximate height
       const x = Math.max(16, Math.round(window.innerWidth / 2 - w / 2));
       const y = Math.max(16, Math.round(window.innerHeight / 2 - h / 2));
       setAboutPos({ x, y });
     }
-    if (dialog === "schema" && schemaPos === null) {
+    if (dialog.schema && schemaPos === null) {
       const w = 520;
       const h = 360;
       const x = Math.max(16, Math.round(window.innerWidth / 2 - w / 2));
       const y = Math.max(16, Math.round(window.innerHeight / 2 - h / 2));
       setSchemaPos({ x, y });
     }
-    if (dialog === "upload" && uploadPos === null) {
+    if (dialog.upload && uploadPos === null) {
       const w = 460;
       const h = 240;
       const x = Math.max(16, Math.round(window.innerWidth / 2 - w / 2));
       const y = Math.max(16, Math.round(window.innerHeight / 2 - h / 2));
       setUploadPos({ x, y });
     }
-    if (dialog !== "about") setAboutPos(null); // reset so it centers next open
-    if (dialog !== "schema") setSchemaPos(null);
-    if (dialog !== "upload") setUploadPos(null);
   }, [dialog, aboutPos, schemaPos, uploadPos]);
+
+  useEffect(() => {
+    if (!dialog.about) setAboutPos(null); // reset so it centers next open
+  }, [dialog.about]);
+
+  useEffect(() => {
+    if (!dialog.schema) setSchemaPos(null);
+  }, [dialog.schema]);
+
+  useEffect(() => {
+    if (!dialog.upload) setUploadPos(null);
+  }, [dialog.upload]);
 
   function onAboutTitlePointerDown(e: React.PointerEvent) {
     // only left-click / primary touch
@@ -307,7 +324,7 @@ export default function App() {
 
   // Attach global listeners while About is open
   useEffect(() => {
-    if (dialog !== "about") return;
+    if (!dialog.about) return;
 
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", stopDragging);
@@ -318,7 +335,7 @@ export default function App() {
       window.removeEventListener("pointerup", stopDragging);
       window.removeEventListener("pointercancel", stopDragging);
     };
-  }, [dialog, aboutPos]);
+  }, [dialog.about, aboutPos]);
 
   function onSchemaTitlePointerDown(e: React.PointerEvent) {
     if (e.button !== 0) return;
@@ -355,7 +372,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (dialog !== "schema") return;
+    if (!dialog.schema) return;
 
     window.addEventListener("pointermove", onSchemaPointerMove);
     window.addEventListener("pointerup", stopSchemaDragging);
@@ -366,7 +383,7 @@ export default function App() {
       window.removeEventListener("pointerup", stopSchemaDragging);
       window.removeEventListener("pointercancel", stopSchemaDragging);
     };
-  }, [dialog, schemaPos]);
+  }, [dialog.schema, schemaPos]);
 
   function onUploadTitlePointerDown(e: React.PointerEvent) {
     if (e.button !== 0) return;
@@ -403,7 +420,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (dialog !== "upload") return;
+    if (!dialog.upload) return;
 
     window.addEventListener("pointermove", onUploadPointerMove);
     window.addEventListener("pointerup", stopUploadDragging);
@@ -414,7 +431,7 @@ export default function App() {
       window.removeEventListener("pointerup", stopUploadDragging);
       window.removeEventListener("pointercancel", stopUploadDragging);
     };
-  }, [dialog, uploadPos]);
+  }, [dialog.upload, uploadPos]);
 
   useEffect(() => {
     if (!datasetMenuOpen) return;
@@ -450,7 +467,7 @@ export default function App() {
   }
 
   async function openSchemaDialog() {
-    setDialog("schema");
+    setDialog((prev) => ({ ...prev, schema: true }));
     await refreshSchema();
   }
 
@@ -495,7 +512,7 @@ export default function App() {
       }
       setSchemaData(data as SchemaResponse);
       setResp(null);
-      setDialog("none");
+      setDialog((prev) => ({ ...prev, upload: false }));
       setUploadFile(null);
     } catch (e: any) {
       setSchemaError(e?.message ?? "Network error");
@@ -647,7 +664,7 @@ async function copyToClipboard(text: string) {
                     onClick={() => {
                       setSchemaError(null);
                       setUploadFile(null);
-                      setDialog("upload");
+                      setDialog((prev) => ({ ...prev, upload: true }));
                       setDatasetMenuOpen(false);
                     }}
                   >
@@ -666,7 +683,13 @@ async function copyToClipboard(text: string) {
                 </div>
               )}
             </div>
-            <a href="#" onClick={(e) => { e.preventDefault(); setDialog("about"); }}>
+            <a
+              href="#"
+              onClick={(e) => {
+                e.preventDefault();
+                setDialog((prev) => ({ ...prev, about: true }));
+              }}
+            >
               About
             </a>
           </div>
@@ -927,8 +950,8 @@ async function copyToClipboard(text: string) {
         </div>
       </div>
 
-      {dialog === "schema" && schemaPos && (
-        <div className="modal-overlay" onClick={() => setDialog("none")}>
+      {dialog.schema && schemaPos && (
+        <div className="modal-overlay">
           <div
             className="window modal-window"
             onClick={(e) => e.stopPropagation()}
@@ -937,7 +960,10 @@ async function copyToClipboard(text: string) {
             <div className="title-bar draggable" onPointerDown={onSchemaTitlePointerDown}>
               <div className="title-bar-text">Schema</div>
               <div className="title-bar-controls">
-                <button aria-label="Close" onClick={() => setDialog("none")} />
+                <button
+                  aria-label="Close"
+                  onClick={() => setDialog((prev) => ({ ...prev, schema: false }))}
+                />
               </div>
             </div>
             <div className="window-body" style={{ maxHeight: "40vh", overflowY: "auto" }}>
@@ -966,7 +992,10 @@ async function copyToClipboard(text: string) {
                 <div>No schema loaded.</div>
               )}
               <div style={{ textAlign: "right", marginTop: 12 }}>
-                <button style={{ color: "white", background: "#555555ff",}} onClick={() => setDialog("none")}>
+                <button
+                  style={{ color: "white", background: "#555555ff" }}
+                  onClick={() => setDialog((prev) => ({ ...prev, schema: false }))}
+                >
                   OK
                 </button>
               </div>
@@ -975,8 +1004,8 @@ async function copyToClipboard(text: string) {
         </div>
       )}
 
-      {dialog === "upload" && uploadPos && (
-        <div className="modal-overlay" onClick={() => setDialog("none")}>
+      {dialog.upload && uploadPos && (
+        <div className="modal-overlay">
           <div
             className="window modal-window"
             onClick={(e) => e.stopPropagation()}
@@ -985,7 +1014,10 @@ async function copyToClipboard(text: string) {
             <div className="title-bar draggable" onPointerDown={onUploadTitlePointerDown}>
               <div className="title-bar-text">Upload CSV</div>
               <div className="title-bar-controls">
-                <button aria-label="Close" onClick={() => setDialog("none")} />
+                <button
+                  aria-label="Close"
+                  onClick={() => setDialog((prev) => ({ ...prev, upload: false }))}
+                />
               </div>
             </div>
             <div className="window-body">
@@ -1007,7 +1039,10 @@ async function copyToClipboard(text: string) {
                 >
                   {datasetBusy ? "Uploading..." : "Upload"}
                 </button>
-                <button onClick={() => setDialog("none")} style={{ color: "white", background: "#555555ff",  }}>
+                <button
+                  onClick={() => setDialog((prev) => ({ ...prev, upload: false }))}
+                  style={{ color: "white", background: "#555555ff" }}
+                >
                   Cancel
                 </button>
               </div>
@@ -1016,10 +1051,9 @@ async function copyToClipboard(text: string) {
         </div>
       )}
 
-      {dialog === "about" && aboutPos && (
+      {dialog.about && aboutPos && (
         <div
           className="modal-overlay"
-          onClick={() => setDialog("none")}
         >
           <div
             className="window modal-window"
@@ -1032,7 +1066,10 @@ async function copyToClipboard(text: string) {
             >
               <div className="title-bar-text">About</div>
               <div className="title-bar-controls">
-                <button aria-label="Close" onClick={() => setDialog("none")} />
+                <button
+                  aria-label="Close"
+                  onClick={() => setDialog((prev) => ({ ...prev, about: false }))}
+                />
               </div>
             </div>
 
@@ -1048,7 +1085,12 @@ async function copyToClipboard(text: string) {
 
               <p style={{marginLeft: "10px", fontSize: "14px" }}>Natural language → OpenAI → safe SQL → DuckDB execution with AI-assisted retry.</p>
               <div style={{ textAlign: "right", marginTop: 12 }}>
-                <button style={{color: "white", background: "#555555ff",}}onClick={() => setDialog("none")}>OK</button>
+                <button
+                  style={{ color: "white", background: "#555555ff" }}
+                  onClick={() => setDialog((prev) => ({ ...prev, about: false }))}
+                >
+                  OK
+                </button>
               </div>
             </div>
           </div>
